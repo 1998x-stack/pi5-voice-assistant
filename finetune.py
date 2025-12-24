@@ -9,10 +9,20 @@ Qwen3-0.6B 在 FineWeb-Edu 数据集上的微调训练脚本
 - 或使用 Google Colab Pro
 
 安装依赖:
+pip install psutil  # 重要：先安装psutil
 pip install unsloth
 pip install --upgrade --no-cache-dir "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
 pip install datasets transformers accelerate peft trl
 """
+
+# ============ 重要：确保 psutil 已安装 ============
+try:
+    import psutil
+except ImportError:
+    print("⚠️  psutil 未安装，正在安装...")
+    import subprocess
+    subprocess.check_call(["pip", "install", "psutil"])
+    import psutil
 
 import torch
 from unsloth import FastLanguageModel
@@ -57,6 +67,9 @@ class Config:
     logging_steps = 10
     save_steps = 500
     save_total_limit = 3
+    
+    # 数据处理配置（修复 psutil 相关问题）
+    dataset_num_proc = 4  # 显式设置处理进程数，避免依赖 psutil
 
 
 # ============ 1. 加载模型 ============
@@ -162,9 +175,9 @@ def create_instruction_from_text(text: str) -> str:
     """根据文本内容创建instruction"""
     # 简单策略：提取前100字符作为上下文，要求生成完整内容
     instructions = [
-        f"请详细解释以下内容：{text[:100]}...",
-        f"继续完成这段文字：{text[:80]}...",
-        f"扩展以下主题：{text[:100]}...",
+        f"请详细解释以下内容:{text[:100]}...",
+        f"继续完成这段文字:{text[:80]}...",
+        f"扩展以下主题:{text[:100]}...",
         "请提供关于这个主题的详细信息。",
     ]
     return random.choice(instructions)
@@ -181,9 +194,10 @@ def train_model(model, tokenizer, dataset, config: Config):
         lambda examples: format_instruction_dataset(examples, tokenizer),
         batched=True,
         remove_columns=dataset.column_names,
+        num_proc=1,  # 使用单进程避免潜在问题
     )
     
-    # 训练参数
+    # 训练参数（添加 dataset_num_proc 参数）
     training_args = TrainingArguments(
         output_dir=config.output_dir,
         per_device_train_batch_size=config.batch_size,
@@ -202,6 +216,7 @@ def train_model(model, tokenizer, dataset, config: Config):
         lr_scheduler_type="cosine",
         seed=42,
         report_to="none",  # 不使用wandb等
+        dataset_num_proc=config.dataset_num_proc,  # 显式设置，避免依赖psutil
     )
     
     # 数据整理器
@@ -222,6 +237,7 @@ def train_model(model, tokenizer, dataset, config: Config):
         data_collator=data_collator,
         args=training_args,
         packing=False,  # 不使用packing以保持对话格式
+        dataset_num_proc=config.dataset_num_proc,  # 也在这里设置
     )
     
     # 开始训练
